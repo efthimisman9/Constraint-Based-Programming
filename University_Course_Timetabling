@@ -1,0 +1,262 @@
+from ortools.sat.python import cp_model
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
+
+#---ΜΕΡΟΣ Α'---
+#---Α1---
+
+#---Μεταβλητές---
+students = ["S1", "S2", "S3", "S4", "S5"]
+lectures = ["Math", "Physics", "Programming", "Networking", "CSP", "Cryptography"]
+times = ["Mon_9", "Mon_11", "Tue_9", "Tue_11", "Wed_9", "Thu_11", "Fri_9"]
+rooms = ["R1", "R2", "R3", "R4"]
+
+#---Χωρητικότητα αιθουσών---
+room_capacity = {"R1": 80, "R2": 40, "R3": 20, "R4": 10}
+
+#---Παρακολούθηση μαθημάτων ανά φοιτητή---
+lec_stud = {
+    "Math": ["S1", "S3", "S4", "S5"],
+    "Physics": ["S2", "S3", "S4"],
+    "Programming": ["S1", "S4", "S5"],
+    "Networking": ["S1", "S2", "S3"],
+    "CSP": ["S3", "S4", "S5"],
+    "Cryptography": ["S4", "S5"]
+}
+
+#---Διαθεσιμότητα διδακτικού προσωπικού---
+teacher_availability = {
+    "Math": ["Mon_9", "Wed_9"],
+    "Physics": ["Mon_11", "Tue_9"],
+    "Programming": ["Mon_9", "Tue_9"],
+    "Networking": ["Tue_11", "Fri_9"],
+    "CSP": ["Tue_9", "Thu_11"],
+    "Cryptography": ["Wed_9", "Fri_9"]
+}
+
+#---Χρονικές εξαρτήσεις π.χ μαθήματα με προαπαιτούμενες γνώσεις---
+prerequisites = [
+    ("Math", "Programming"),  
+    ("Programming", "CSP"),
+    ("Networking", "Cryptography")
+]
+
+#---Α4 (Μέρος 1)---
+#---Μαθήματα που έχουν εργαστήριο---
+
+labs = ["Programming", "Networking", "CSP"]
+
+#---A2---
+#---CSP μεταβλητές---
+
+model = cp_model.CpModel()
+
+#---x[i, t] = 1 αν το μάθημα i γίνεται στην χρονική περίοδο t---
+x = {}
+for l in lectures:
+    for t in times:
+        x[l, t] = model.NewBoolVar(f"x[{l}, {t}]")
+
+#---y[i, r] = 1 αν το μάθημα i γίνεται στην αίθουσα  r---
+y = {}
+for l in lectures:
+    for r in rooms:
+        y[l, r] = model.NewBoolVar(f"y[{l}, {r}]")
+
+#---A4 (Μέρος 2)---
+Lecture = {}
+Lab = {}
+for l in lectures:
+    for t in times:
+        Lecture[l, t] = model.NewBoolVar(f"Lecture[{l}, {t}]")
+        Lab[l, t] = model.NewBoolVar(f"Lab[{l}, {t}]")
+
+#---Σύνδεση Lecture με x: η Lecture ώρα ΠΡΕΠΕΙ να είναι η ώρα που ορίζει x---
+for l in lectures:
+    for t in times:
+        #---Εξασφαλίζουμε ότι η Lecture μεταβλητή είναι ίδια με x (συνεπές output)---
+        model.Add(Lecture[l, t] == x[l, t])
+
+#---Για μαθήματα που δεν έχουν εργαστήριο, ασφαλίζουμε ότι δεν θα έχουν lab (sum == 0)---
+for l in lectures:
+    if l not in labs:
+        model.Add(sum(Lab[l, t] for t in times) == 0)
+
+
+#---lec_time[l] = ακέραιος δείκτης χρόνου για το μάθημα l---
+time_index = {t: i for i, t in enumerate(times)}
+lec_time = {l: model.NewIntVar(0, len(times) - 1, f"time[{l}]") for l in lectures}
+
+#---συνδέουμε lec_time με τα x[l, t]
+for l in lectures:
+    model.Add(sum(x[l, t] for t in times) == 1) #κάθε μια ώρα
+    model.Add(sum(time_index[t] * x[l, t] for t in times) == lec_time[l])
+
+#---A4 (Μέρος 3)---
+#---Κάθε μάθημα έχει μία διάλεξη---
+for l in lectures:
+    model.Add(sum(Lecture[l, t] for t in times) == 1)
+
+#---Κάθε μάθημα στη λίστα labs έχει και εργαστήριο---
+for l in labs:
+    model.Add(sum(Lab[l, t] for t in times) == 1)
+
+#---Διάλεξη και εργαστήριο δεν μπορούν να γίνουν την ίδια ώρα---
+for l in labs:
+    for t in times:
+        model.Add(Lecture[l, t] + Lab[l, t] <= 1)
+
+
+#---A3---
+#---Περιορισμοί CSP---
+
+#---1. Κάθε μάθημα έχει ακριβώς μια ώρα---
+for l in lectures:
+    model.Add(sum(x[l, t] for t in times) == 1)
+
+#---2. Κάθε μάθημα έχει ακριβώς μια αίθουσα---
+for l in lectures:
+    model.Add(sum(y[l, r] for r in rooms) == 1)
+
+#---3. Μοναδική χρήση αίθουσας ανά ώρα---
+#---Βοηθητική μεταβλητή Ζ για μοναδική χρήση αίθουσας---
+#---Δημιουργία z[l, r, t]---
+
+z = {}
+for l in lectures:
+    for r in rooms:
+        for t in times:
+            z[l, r, t] = model.NewBoolVar(f"z[{l}, {r}, {t}]")
+           
+            #---z = 1 => (x = 1 and y = 1)---
+            model.AddBoolAnd([x[l, t], y[l, r]]).OnlyEnforceIf(z[l, r, t])
+
+            #---z = 0 => τουλάχιστον ένα από x, y είναι 0---
+            model.AddBoolOr([x[l, t].Not(), y[l, r].Not()]).OnlyEnforceIf(z[l, r, t].Not())
+
+#---Μοναδική χρήση αίθουσας: σε κάθε (r, t) το άθροισμα των z <= 1---
+for r in rooms:
+    for t in times:
+        #---Αν το μάθημα l είναι στην αίθουσα r και ώρα t, τότε και οι δύο μεταβλητές πρέπει να είναι 1---
+        model.Add(sum(z[l, r, t] for l in lectures) <= 1)
+
+#---4. Χωρητικότητα αιθουσών---
+for l in lectures:
+    needed = len(lec_stud[l])
+    for r in rooms:
+        model.Add(y[l, r] * needed <= room_capacity[r])
+
+#---5. Διαθεσιμότητα διδασκόντων---
+for l in lectures:
+    available_times = teacher_availability[l]
+    model.Add(sum(x[l, t] for t in available_times) == 1)
+
+#---6. Αποφυγή επικαλύψεων φοιτητών---
+for s in students:
+    enrolled = [l for l in lectures if s in lec_stud[l]]
+    for t in times:
+        model.Add(sum(x[l, t] for l in enrolled) <= 1)
+
+#---7. Χρονικές εξαρτήσεις---
+for prereq, dependent in prerequisites:
+    model.Add(lec_time[prereq] < lec_time[dependent])
+
+#---Α4 (Μέρος 4)---
+#---lecture_time και lab_time όπου το lecture_time αφορά τη Lecture μεταβλητή. ΚΑΜΙΑ ΣΧΕΣΗ με το lec_time που αναγράφεται πιο πάνω--
+lecture_time = {}
+lab_time = {}
+
+for l in labs:
+    lecture_time[l] = model.NewIntVar(0, len(times) - 1, f"lecture_time[{l}]")
+    lab_time[l] = model.NewIntVar(0, len(times) - 1, f"lab_time[{l}]")
+
+    model.Add(sum(time_index[t] * Lecture[l, t] for t in times) == lecture_time[l])
+    model.Add(sum(time_index[t] * Lab[l, t] for t in times) == lab_time[l])
+
+    #---Χρονική εξάρτηση: Διάλεξη πριν το εργαστήριο---
+    model.Add(lecture_time[l] < lab_time[l])
+
+
+#---Optimization: Ισορροπημένη χρήση αιθουσών---
+
+room_load = {} #---πόσα μαθήματα μπαίνουν στην κάθε αίθουσα---
+
+deviation = [] #---λίστα με αποκλίσεις---
+
+L = len(lectures)
+R = len(rooms)
+
+for r in rooms:
+    room_load[r] = model.NewIntVar(0, L, f"load_{r}")
+    model.Add(room_load[r] == sum(y[l, r] for l in lectures))
+
+    #--- R * load[r] - L---
+    dev = model.NewIntVar(0, L * R, f"dev_{r}")
+    model.Add(dev >= R * room_load[r] - L)
+    model.Add(dev >= L - R * room_load[r])
+    deviation.append(dev)
+
+    model.Minimize(sum(deviation))
+
+
+#---A5---
+#---Εκτύπωση Αποτελεσμάτων---
+
+solver = cp_model.CpSolver()
+result = solver.Solve(model)
+
+
+if result == cp_model.OPTIMAL or result == cp_model.FEASIBLE:
+    print("\n ---ΤΕΛΙΚΟ ΠΡΟΓΡΑΜΜΑ---\n")
+
+    for l in lectures:
+        #---χρονική περίοδος μαθήματος---
+        assigned_time = [t for t in times if solver.Value(x[l ,t]) == 1][0]
+
+        #---αίθουσα μαθήματος---
+        assigned_room = [r for r in rooms if solver.Value(y[l, r]) == 1][0]
+
+        print(f" Μάθημα : {l}")
+        print(f" Ώρα : {', '.join(teacher_availability[l])}")
+        print(f" Αίθουσα : {assigned_room}")
+
+        #---Lecture Time---
+        lecture_t = [t for t in times if solver.Value(Lecture[l, t]) == 1]
+        print(f" Lecture: {lecture_t}")
+        
+        #---Lab Time---
+        lab_t = [t for t in times if solver.Value(Lab[l, t]) == 1]
+        print(f" Lab: {lab_t[0] if lab_t else '---'}\n")
+        print()
+else:
+    print("Δεν βρέθηκε εφικτή λύση.")        
+
+
+print("\n--- Ωράριο ανά φοιτητή + Έλεγχος Συγκρούσεων ---\n")
+
+for s in students:
+    print(f"\n Φοιτητής: {s}")
+
+    #---μαθήματα που παρακολουθεί ο φοιτητής---
+    enrolled_courses = [l for l in lectures if s in lec_stud[l]]
+
+    #---συλλογή των μαθημάτων ανά ώρα---
+    schedule_by_time = {}
+
+    for l in enrolled_courses:
+        assigned_time = [t for t in times if solver.Value(x[l, t]) == 1][0]
+        assigned_room = [r for r in rooms if solver.Value(y[l, r]) == 1][0]
+
+        print(f"  - {l}: {assigned_time}, Room {assigned_room}")
+
+        schedule_by_time.setdefault(assigned_time, []).append(l)
+
+    #---Έλεγχος για συγκρούσεις---
+    conflicts = {t: cs for t, cs in schedule_by_time.items() if len(cs) > 1}
+
+    if conflicts:
+        print(" Συγκρούσεις: ")
+        for t, cs in conflicts.items():
+            print(f"     Ώρα {t}: {', '.join(cs)}")
+    else:
+        print(" Χωρίς συγκρούσεις. ")
